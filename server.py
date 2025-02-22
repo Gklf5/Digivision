@@ -1,106 +1,163 @@
-import tkinter as tk
-from PIL import Image, ImageTk
+from flask import Flask, request, jsonify
+import os
 import cv2
+import numpy as np
+import base64
+import requests
+import time
+import threading
+from supabase import create_client, Client
 from face_detection import FaceDetector
 from face_recognizer import FaceHandler
 from cam_handler import CamHandler
 
+# Configuration
+SUPABASE_URL = "https://xxedtgmcylvzvwwdfgyk.supabase.co"
+SUPABASE_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inh4ZWR0Z21jeWx2enZ3d2RmZ3lrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDAwNzE4NzEsImV4cCI6MjA1NTY0Nzg3MX0.7d9bosjWYG7ygozLSvdb_oxAZSH5nhLJRRv7VlxFKAw"
+
+API_URL = "http://your-api-endpoint.com/notify"
+DETECTION_INTERVAL = 10  # Minimum time before re-notifying the same person
+UNKNOWN_FACE_DIR = "./unknown_faces"
+CAMERA_SOURCES = [0]  # Add more camera indices or RTSP URLs
+
+# Initialize Supabase
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_API_KEY)
+
 # Initialize components
-camera_handler = CamHandler(cv2.VideoCapture(0))
 face_detector = FaceDetector()
 face_handler = FaceHandler()
+cameras = [CamHandler(cv2.VideoCapture(src)) for src in CAMERA_SOURCES]
+last_notified = {}
 
-root = tk.Tk()
-root.title("Face Recognition System")
+app = Flask(__name__)
 
-# GUI Widgets
-fps_label = tk.Label(root, text="Set FPS:")
-fps_label.pack()
+# Ensure unknown faces directory exists
+if not os.path.exists(UNKNOWN_FACE_DIR):
+    os.makedirs(UNKNOWN_FACE_DIR)
 
-fps_entry = tk.Entry(root)
-fps_entry.pack()
-
-def on_fps_change():
+def log_event(event):
+    """Logs recognition events to Supabase"""
+    data = {"log_message": event, "timestamp": time.strftime('%Y-%m-%d %H:%M:%S')}
     try:
-        fps = int(fps_entry.get())
-        camera_handler.set_fps(fps)
-    except ValueError:
-        print("Invalid FPS value")
-fps_entry.bind("<Return>", lambda event: on_fps_change())
+        supabase.table("system_logs").insert(data).execute()
+    except:
+        print("⚠️ Log not sent to Supabase!")
 
-camera_label = tk.Label(root)
-camera_label.pack()
+    print(event)  # Debugging
 
-faces_frame = tk.Frame(root)
-faces_frame.pack()
+def send_notification(name, location, timestamp, confidence):
+    """ Sends a recognition alert via API """
+    data = {
+        "name": name,
+        "location": location,
+        "timestamp": float(timestamp),
+        "confidence": float(confidence)
+    }
+    try:
+        response = requests.post(API_URL, json=data)
+        if response.status_code == 200:
+            print(f"📢 Notification sent for {name} at {location}")
+            log_event(f"Notification sent for {name} at {location} with confidence {confidence}")
+        else:
+            print(f"❌ Failed to send notification: {response.status_code} - {response.text}")
+            log_event(f"Failed to send notification for {name}: {response.status_code} - {response.text}")
+    except requests.exceptions.RequestException as e:
+        print(f"⚠️ API request error: {e}")
+        log_event(f"API request error: {e}")
 
-def show_detected_faces(faces):
-    for widget in faces_frame.winfo_children():
-        widget.destroy()
+def save_unknown_face(face_image):
+    """Saves unrecognized faces for later review"""
+    timestamp = time.strftime('%Y%m%d_%H%M%S')
+    filename = os.path.join(UNKNOWN_FACE_DIR, f"unknown_{timestamp}.jpg")
+    # cv2.imwrite(filename, face_image)
+    print(f"❌ Unknown face saved: {filename}")
 
-    for face in faces:
-        face = cv2.cvtColor(face, cv2.COLOR_BGR2RGB)
-        img = ImageTk.PhotoImage(Image.fromarray(face))
-        label = tk.Label(faces_frame, image=img)
-        label.imgtk = img
-        label.pack(side="left")
+def process_camera(cam, cam_index):
+    """Process camera feed for face recognition"""
+    global last_notified
+    while True:
+        start_time = time.time()
 
-def update_frame():
-    frame = camera_handler.get_frame()
-    if frame is not None:
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        img = ImageTk.PhotoImage(Image.fromarray(frame))
-        camera_label.imgtk = img
-        camera_label.configure(image=img)
-    root.after(10, update_frame)
+        frame = cam.get_frame()
+        faces = face_detector.get_face_images(frame)
+        print(f"📸 Detected {len(faces)} faces in Camera {cam_index}")
 
-def handle_frame():
-    frame = camera_handler.get_frame()
-    faces = face_detector.get_face_images(frame)
-    if faces:
-        show_detected_faces(faces)
-        face_detector.save_faces(frame, faces, "./detected_faces")
         for face in faces:
-            if face_handler.is_known(face, get_threshold()):
-                print("Known face detected!")
-    root.after(1000, handle_frame)
+            recog_start = time.time()
+            name, confidence = face_handler.is_known(face)
+            recog_time = time.time() - recog_start
 
-threshold_label = tk.Label(root, text="Set Recognition Threshold:")
-threshold_label.pack()
+            timestamp = time.time()
+            location = f"Camera {cam_index}"
 
-threshold_entry = tk.Entry(root)
-threshold_entry.pack()
-threshold_entry.insert(0, "0.6")  # Default value
+            if name:
+                if name not in last_notified or (timestamp - last_notified[name] > DETECTION_INTERVAL):
+                    send_notification(name, location, timestamp, confidence)
+                    last_notified[name] = timestamp
+                    log_event(f"✅ Recognition Time: {recog_time:.3f}s | {name} detected")
+            else:
+                save_unknown_face(face)
+                log_event(f"❌ Unknown face detected at {location}")
 
-def get_threshold():
+        total_time = time.time() - start_time
+        log_event(f"⏳ Frame Processing Time: {total_time:.3f}s")
+
+def process_new_face(image_data, name):
+    """Convert image to embedding & store in Supabase"""
+    image_bytes = base64.b64decode(image_data)
+    np_arr = np.frombuffer(image_bytes, np.uint8)
+    image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+
+    # Get face embedding
+    faces = face_detector.get_face_images(image)
+    if not faces:
+        return False
+
+    embedding = face_handler.get_embedding(faces[0])
+    if embedding is None:
+        return False
+
+    # Store in Supabase
+    data = {"name": name, "embedding": embedding.tolist()}
+    response = supabase.table("criminal_faces").insert(data).execute()
+
+    return response
+
+@app.route("/add_face", methods=["POST"])
+def add_face():
+    """API to add new face to criminal database from web app"""
+    data = request.json
+    name = data.get("name")
+    image_data = data.get("image")  # Base64 encoded image
+
+    if not name or not image_data:
+        return jsonify({"error": "Missing name or image"}), 400
+
+    success = process_new_face(image_data, name)
+
+    if success:
+        return jsonify({"message": f"Face for {name} added successfully"}), 200
+    else:
+        return jsonify({"error": "Failed to process face"}), 500
+
+def main():
+    """ Starts multiple threads to process camera feeds in parallel """
+    threads = []
+    for i, cam in enumerate(cameras):
+        t = threading.Thread(target=process_camera, args=(cam, i))
+        t.daemon = True
+        threads.append(t)
+        t.start()
+
     try:
-        return float(threshold_entry.get())
-    except ValueError:
-        print("Invalid threshold value, using default 0.6")
-        return 0.6
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\nShutting down...")
+        for cam in cameras:
+            cam.release()
+        cv2.destroyAllWindows()
 
-def on_close():
-    camera_handler.release()
-    root.destroy()
-
-root.protocol("WM_DELETE_WINDOW", on_close)
-
-update_frame()
-handle_frame()
-
-root.mainloop()
-
-
-#
-#
-#
-## Replace with your Supabase URL and API Key
-# SUPABASE_URL = "https://zjecjfsufhuxygmzosuh.supabase.co"
-# SUPABASE_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpqZWNqZnN1Zmh1eHlnbXpvc3VoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MjkxNzQyODMsImV4cCI6MjA0NDc1MDI4M30.87rEdxoi6elx5qq6-W8wxrclotHpbjaYbX7Wtz4z3ZA"
-
-# supabase: Client = create_client(SUPABASE_URL, SUPABASE_API_KEY)
-#
-#
-#
-#
-#
+if __name__ == "__main__":
+    threading.Thread(target=main, daemon=True).start()
+    app.run(host="0.0.0.0", port=5000)
