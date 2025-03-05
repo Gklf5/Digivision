@@ -10,18 +10,25 @@ from supabase import create_client, Client
 from face_detection import FaceDetector
 from face_recognizer import FaceHandler
 from cam_handler import CamHandler
+from dotenv import load_dotenv
+import asyncio
+load_dotenv()
 
 # Configuration
-SUPABASE_URL = "https://xxedtgmcylvzvwwdfgyk.supabase.co"
-SUPABASE_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inh4ZWR0Z21jeWx2enZ3d2RmZ3lrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDAwNzE4NzEsImV4cCI6MjA1NTY0Nzg3MX0.7d9bosjWYG7ygozLSvdb_oxAZSH5nhLJRRv7VlxFKAw"
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_API_KEY = os.getenv("SUPABASE_API_KEY")
 
-API_URL = "http://your-api-endpoint.com/notify"
+
+
 DETECTION_INTERVAL = 10  # Minimum time before re-notifying the same person
 UNKNOWN_FACE_DIR = "./unknown_faces"
 CAMERA_SOURCES = [0]  # Add more camera indices or RTSP URLs
 
 # Initialize Supabase
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_API_KEY)
+
+
+
 
 # Initialize components
 face_detector = FaceDetector()
@@ -45,25 +52,22 @@ def log_event(event):
 
     print(event)  # Debugging
 
-def send_notification(name, location, timestamp, confidence):
+def send_notification(name, location, confidence, timestamp):
     """ Sends a recognition alert via API """
     data = {
         "name": name,
         "location": location,
-        "timestamp": float(timestamp),
-        "confidence": float(confidence)
+        "confidence": float(confidence),
+        "timestamp": float(timestamp)
     }
     try:
-        response = requests.post(API_URL, json=data)
-        if response.status_code == 200:
-            print(f"📢 Notification sent for {name} at {location}")
-            log_event(f"Notification sent for {name} at {location} with confidence {confidence}")
-        else:
-            print(f"❌ Failed to send notification: {response.status_code} - {response.text}")
-            log_event(f"Failed to send notification for {name}: {response.status_code} - {response.text}")
-    except requests.exceptions.RequestException as e:
-        print(f"⚠️ API request error: {e}")
-        log_event(f"API request error: {e}")
+        #post to supabase table notification_test
+        supabase.table("notification_test").insert(data).execute()
+        print(f"✅ Notification sent for {name} at {location}")
+        log_event(f"Notification sent for {name} at {location} with confidence {confidence}")
+    except Exception as e:
+        print(f"❌ Notification failed for {name} at {location}: {e}")
+        log_event(f"Notification failed for {name} at {location}: {e}")
 
 def save_unknown_face(face_image):
     """Saves unrecognized faces for later review"""
@@ -76,6 +80,7 @@ def process_camera(cam, cam_index):
     """Process camera feed for face recognition"""
     global last_notified
     while True:
+        time.sleep(60)
         start_time = time.time()
 
         frame = cam.get_frame()
@@ -92,7 +97,7 @@ def process_camera(cam, cam_index):
 
             if name:
                 if name not in last_notified or (timestamp - last_notified[name] > DETECTION_INTERVAL):
-                    send_notification(name, location, timestamp, confidence)
+                    send_notification(name, location, confidence, timestamp)
                     last_notified[name] = timestamp
                     log_event(f"✅ Recognition Time: {recog_time:.3f}s | {name} detected")
             else:

@@ -1,16 +1,16 @@
-import pickle
 import os
-embeddings_file = "face_embeddings.pkl"
+from supabase import create_client, Client
+import asyncio
+from dotenv import load_dotenv
 
-if not os.path.exists(embeddings_file):
-    print("❌ Face database not found!")
-else:
-    with open(embeddings_file, 'rb') as f:
-        embeddings = pickle.load(f)
+# Load environment variables
+load_dotenv()
 
-    if not embeddings:
-        print("❌ No faces found in the database!")
-    else:
-        print("\n✅ Stored Faces in Database:")
-        for name, emb_list in embeddings.items():
-            print(f"- {name} ({len(emb_list)} embeddings)")
+# Supabase configuration
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_API_KEY = os.getenv("SUPABASE_API_KEY")
+
+# Initialize Supabase
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_API_KEY)
+
+
