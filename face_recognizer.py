@@ -8,11 +8,15 @@ from supabase import create_client, Client
 from sklearn.metrics.pairwise import cosine_similarity
 import time
 import threading
-# Supabase Config
-SUPABASE_URL = "https://xxedtgmcylvzvwwdfgyk.supabase.co"
-SUPABASE_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inh4ZWR0Z21jeWx2enZ3d2RmZ3lrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDAwNzE4NzEsImV4cCI6MjA1NTY0Nzg3MX0.7d9bosjWYG7ygozLSvdb_oxAZSH5nhLJRRv7VlxFKAw"
+from dotenv import load_dotenv
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_API_KEY)
+load_dotenv()
+
+# Supabase Config
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 class FaceHandler:
     def __init__(self, device=None, threshold=0.5):
