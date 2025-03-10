@@ -131,19 +131,47 @@ def process_new_face(image_data, name):
 @app.route("/add_face", methods=["POST"])
 def add_face():
     """API to add new face to criminal database from web app"""
-    data = request.json
-    name = data.get("name")
-    image_data = data.get("image")  # Base64 encoded image
+    data = request.get_json()
+    if not data or "video_url" not in data or "name" not in data:
+        return jsonify({"error": "Missing video_url or name"}), 400
 
-    if not name or not image_data:
-        return jsonify({"error": "Missing name or image"}), 400
+    video_url = data["video_url"]
+    name = data["name"]
 
-    success = process_new_face(image_data, name)
+    # Download video from URL
+    try:
+        response = requests.get(video_url)
+        video_bytes = response.content
+        video_array = np.frombuffer(video_bytes, np.uint8)
+        video = cv2.imdecode(video_array, cv2.IMREAD_COLOR)
+    except Exception as e:
+        return jsonify({"error": f"Failed to download video: {str(e)}"}), 400
 
-    if success:
-        return jsonify({"message": f"Face for {name} added successfully"}), 200
-    else:
-        return jsonify({"error": "Failed to process face"}), 500
+    # Get face embeddings
+    faces = face_detector.get_face_images(video)
+    if not faces:
+        return jsonify({"error": "No faces detected in video"}), 400
+
+    # Process all detected faces
+    embeddings = []
+    for face in faces:
+        embedding = face_handler.get_embedding(face)
+        if embedding is not None:
+            embeddings.append(embedding)
+
+    if not embeddings:
+        return jsonify({"error": "Failed to generate face embeddings"}), 400
+
+    # Store all embeddings in Supabase
+    try:
+        data = [{"name": name, "embedding": emb.tolist()} for emb in embeddings]
+        response = supabase.table("criminal_faces").insert(data).execute()
+        return jsonify({
+            "success": True, 
+            "message": f"Added {len(embeddings)} faces successfully"
+        })
+    except Exception as e:
+        return jsonify({"error": f"Failed to store in database: {str(e)}"}), 500
 
 def main():
     """ Starts multiple threads to process camera feeds in parallel """
