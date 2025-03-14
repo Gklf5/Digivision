@@ -101,6 +101,15 @@ class FaceHandler:
         self.embeddings = self.load_embeddings_from_supabase()
         print("🔄 Face embeddings updated from Supabase.")
 
+    def is_similar(self, embedding, threshold=0.5):
+        """ Check if a given embedding is similar to any of the embeddings in the database. """
+        for name, stored_embeddings in self.embeddings.items():
+            for stored_embedding in stored_embeddings:
+                similarity = cosine_similarity([embedding], [stored_embedding])[0][0]
+                if similarity > threshold:
+                    return True
+        return False
+    
 
 if __name__ == "__main__":
     face_handler = FaceHandler()

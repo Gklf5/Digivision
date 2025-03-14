@@ -70,3 +70,5 @@ class FaceDetector:
         """ Detect and return cropped face images. """
         faces = self.detect_faces(image)
         return self.crop_faces(image, faces)
+    
+    
