@@ -69,6 +69,8 @@ class FaceDetector:
     def get_face_images(self, image):
         """ Detect and return cropped face images. """
         faces = self.detect_faces(image)
-        return self.crop_faces(image, faces)
+        return self.crop_faces(image, faces), faces
+    
+
     
     

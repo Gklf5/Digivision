@@ -19,7 +19,7 @@ SUPABASE_API_KEY = os.getenv("SUPABASE_API_KEY")
 
 
 class FaceHandler:
-    def __init__(self, device=None, threshold=0.5):
+    def __init__(self, device=None, threshold=0.602):
         """ Initialize FaceNet model, load embeddings, and set recognition threshold. """
         self.device = device if device else ('cuda' if torch.cuda.is_available() else 'cpu')
         self.threshold = threshold  # Cosine similarity threshold for matching
@@ -89,7 +89,7 @@ class FaceHandler:
         for name, stored_embeddings in self.embeddings.items():
             for stored_embedding in stored_embeddings:
                 similarity = cosine_similarity([target_embedding], [stored_embedding])[0][0]
-                print(f"🔍 Similarity with {name}: {similarity:.3f}")  # Debugging
+                # print(f"🔍 Similarity with {name}: {similarity:.3f}")  # Debugging
 
                 if similarity > self.threshold and similarity > best_score:
                     best_match, best_score = name, similarity
@@ -111,5 +111,3 @@ class FaceHandler:
         return False
     
 
-if __name__ == "__main__":
-    face_handler = FaceHandler()

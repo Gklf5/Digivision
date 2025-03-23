@@ -16,16 +16,23 @@ import asyncio
 from flask_cors import CORS
 load_dotenv()
 
+
+SHOW_PREVIEW = False
+
 # Configuration
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_API_KEY = os.getenv("SUPABASE_API_KEY")
 
-rtsp_url = "http://192.168.31.111:4747/video"
-
+rtsp_url_1 = "http://192.168.250.8:4747/video"
+rtsp_url_2 = "http://172.16.12.143:4747/video"
+rtsp_url_3 = "http://172.16.13.151:4747/video"
 DETECTION_INTERVAL = 10  # Minimum time before re-notifying the same person
 UNKNOWN_FACE_DIR = "./unknown_faces"
-CAMERA_SOURCES = [0, rtsp_url]  # Add more camera indices or RTSP URLs
+CAMERA_SOURCES = [rtsp_url_1]  # Add more camera indices or RTSP URLs
 FPS = 10
+
+LOCATION_NAME = {1:""}
+
 
 # Initialize Supabase
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_API_KEY)
@@ -56,17 +63,21 @@ def log_event(event):
 
     print(event)  # Debugging
 
-def send_notification(name, location, confidence, timestamp):
+def send_notification(name, location, confidence, photo_url):
     """ Sends a recognition alert via API """
+    #get id from supabase table criminal_faces where name = name
+    id = supabase.table("criminal_faces").select("id").eq("name", name).execute().data[0]["id"]
+    # photo_url = supabase.table("criminal_db").select("photo_url").eq("id", id).execute().data[0]["photo_url"]
+    if not photo_url:
+        photo_url  = supabase.table("criminal_db").select("photo_url").eq("id", id).execute().data[0]["photo_url"]
     data = {
-        "name": name,
+        "criminal_id": id,
         "location": location,
-        "confidence": float(confidence),
-        "timestamp": float(timestamp)
+        "found_snap":photo_url
     }
     try:
         #post to supabase table notification_test
-        supabase.table("notification_test").insert(data).execute()
+        supabase.table("criminal_notification").insert(data).execute()
         print(f"✅ Notification sent for {name} at {location}")
         log_event(f"Notification sent for {name} at {location} with confidence {confidence}")
     except Exception as e:
@@ -89,6 +100,7 @@ def is_significant_change(frame1, frame2, threshold=0.80):
     return similarity < threshold  # Process only if similarity is below threshold
 
 def process_camera(cam, cam_index):
+    f_c = 0
     """Process camera feed for face recognition"""
     global last_notified
     last_frame = cam.get_frame()
@@ -97,10 +109,16 @@ def process_camera(cam, cam_index):
         start_time = time.time()
 
         frame = cam.get_frame()
+        f_c = f_c + 1
+        if f_c != 25:
+            continue
+        f_c = 0
         if not is_significant_change(frame, last_frame):
             continue
         last_frame = frame
-        faces = face_detector.get_face_images(frame)
+        faces, face_coords = face_detector.get_face_images(frame)
+        frame_with_face = face_detector.draw_faces(frame, face_coords)
+       
         print(f"📸 Detected {len(faces)} faces in Camera {cam_index}")
 
 
@@ -116,9 +134,18 @@ def process_camera(cam, cam_index):
 
             if name:
                 if name not in last_notified or (timestamp - last_notified[name] > DETECTION_INTERVAL):
-                    send_notification(name, location, confidence, timestamp)
+                    if SHOW_PREVIEW:
+                        cv2.putText(frame_with_face, f"Faces: {len(faces)}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
+                        cv2.imshow(f"Camera {cam_index}", frame_with_face)
+                        
+                        if cv2.waitKey(1) & 0xFF == ord('q'):
+                            break
+        
+                    photo_url = upload_photo(face)
+                    send_notification(name, location, confidence, photo_url)
+                    # print(f"✅ Notification sent for {name} at {location}")
                     last_notified[name] = timestamp
-                    log_event(f"✅ Recognition Time: {recog_time:.3f}s | {name} detected")
+                    log_event(f"✅ Recognition Time: {recog_time:.3f}s | {name} detected, confidence: {confidence:.3f}")
             else:
                 # save_unknown_face(face)
                 log_event(f"❌ Unknown face detected at {location}")
@@ -133,7 +160,7 @@ def process_new_face(image_data, name):
     image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
 
     # Get face embedding
-    faces = face_detector.get_face_images(image)
+    faces, _ = face_detector.get_face_images(image)
     if not faces:
         return False
 
@@ -167,11 +194,13 @@ def add_face():
         response = requests.get(video_url)
         with open("temp/video.mp4", "wb") as f:
             f.write(response.content)
+        #delete video temp/video.mp4
 
     except Exception as e:
         return jsonify({"error": f"Failed to download video: {str(e)}"}), 400   
     
     #read video
+    print("Reading video...")
     video = cv2.VideoCapture("temp/video.mp4")
     #get frame from video
     embeddings = []
@@ -179,7 +208,9 @@ def add_face():
         ret, frame = video.read()
         if not ret:
             break
-        faces = face_detector.get_face_images(frame)
+        faces, _ = face_detector.get_face_images(frame)
+        print(f"Found {len(faces)} faces")
+
         if not faces:
             continue
         for face in faces:
@@ -189,18 +220,28 @@ def add_face():
                 continue
             if embedding is not None:
                 embeddings.append(embedding)
+        print(f"Found {len(embeddings)} embeddings")
+        if len(embeddings) > 20:
+            break
 
     if not embeddings:
+        print("No embeddings found")
         return jsonify({"error": "Failed to generate face embeddings"}), 400
 
     # Store all embeddings in Supabase
     try:
-        data = [{"name": name, "embedding": emb.tolist()} for emb in embeddings]
+        print("Storing embeddings in Supabase...")
+        #fetch id from table criminal_db where name = name
+        id = supabase.table("criminal_db").select("id").eq("name", name).execute().data[0]["id"]
+        data = [{"id": id, "name": name, "embedding": emb.tolist()} for emb in embeddings]
         response = supabase.table("criminal_faces").insert(data).execute()
+        os.remove("temp/video.mp4")
+        face_handler.refresh_embeddings()
         return jsonify({
             "success": True, 
             "message": f"Added {len(embeddings)} faces successfully"
         })
+    
     except Exception as e:
         return jsonify({"error": f"Failed to store in database: {str(e)}"}), 500
 
@@ -221,6 +262,51 @@ def main():
         for cam in cameras:
             cam.release()
         cv2.destroyAllWindows()
+
+def upload_photo(image):
+    """
+    Upload an image (numpy array) to Supabase Storage.
+    
+    :param image: OpenCV image (numpy array)
+    :return: Public URL of the uploaded image or None if failed.
+    """
+
+    if image is None:
+        print("Error: No image provided.")
+        return None
+
+    # Encode image as JPEG
+    success, buffer = cv2.imencode('.jpg', image)
+    if not success:
+        print("Error: Could not encode image.")
+        return None
+
+    # Generate unique filename
+    timestamp = int(time.time())
+    file_name = f"{timestamp}_photo.jpg"
+
+    try:
+        # Upload image to Supabase Storage
+        response = supabase.storage.from_('criminal_photos').upload(
+            file_name,
+            buffer.tobytes(),  # Convert to bytes for upload
+            file_options={"content-type": "image/jpeg"}  # Set MIME type
+        )
+
+        # Check if response has an "error" attribute
+        if hasattr(response, "error") and response.error:
+            print("Upload failed:", response.error)
+            return None
+
+        # Get the public URL of the uploaded file
+        public_url = supabase.storage.from_('criminal_photos').get_public_url(file_name)
+        print("Uploaded successfully:", public_url)
+
+        return public_url
+
+    except Exception as e:
+        print("Exception occurred while uploading:", str(e))
+        return None
 
 if __name__ == "__main__":
     threading.Thread(target=main, daemon=True).start()
