@@ -10,20 +10,20 @@ from supabase import create_client, Client
 from face_detection import FaceDetector
 from face_recognizer import FaceHandler
 from cam_handler import CamHandler
-from dotenv import load_dotenv
 from skimage.metrics import structural_similarity as ssim
 import asyncio
 from flask_cors import CORS
+from dotenv import load_dotenv
 load_dotenv()
 
 
-SHOW_PREVIEW = False
 
 # Configuration
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_API_KEY = os.getenv("SUPABASE_API_KEY")
+SHOW_PREVIEW = False
 
-rtsp_url_1 = "http://192.168.250.8:4747/video"
+rtsp_url_1 = "http://192.168.31.111:4747/video"
 rtsp_url_2 = "http://172.16.12.143:4747/video"
 rtsp_url_3 = "http://172.16.13.151:4747/video"
 DETECTION_INTERVAL = 10  # Minimum time before re-notifying the same person
@@ -236,13 +236,15 @@ def add_face():
         data = [{"id": id, "name": name, "embedding": emb.tolist()} for emb in embeddings]
         response = supabase.table("criminal_faces").insert(data).execute()
         os.remove("temp/video.mp4")
-        face_handler.refresh_embeddings()
+        print(f"response:{response}")
+        # face_handler.refresh_embeddings()
         return jsonify({
             "success": True, 
             "message": f"Added {len(embeddings)} faces successfully"
         })
     
     except Exception as e:
+        print(str(e))
         return jsonify({"error": f"Failed to store in database: {str(e)}"}), 500
 
 def main():
